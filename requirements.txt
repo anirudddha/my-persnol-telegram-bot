@@ -1,0 +1,6 @@
+litellm
+psycopg[binary,pool]
+httpx
+python-dotenv
+pytest
+pytest-asyncio

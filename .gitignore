@@ -1,0 +1,6 @@
+.env
+.venv/
+jarvis.log
+jarvis.pid
+__pycache__/
+.pytest_cache/
