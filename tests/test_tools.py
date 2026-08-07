@@ -315,6 +315,31 @@ async def test_failed_send_leaves_reminder_for_the_next_sweep(user):
 
 
 @needs_db
+async def test_users_cannot_see_each_others_data(user, database):
+    """ALLOWED_TELEGRAM_IDS may list several people; they share one database."""
+    other = TEST_USER - 1
+    await db.execute("delete from users where telegram_id = %s", other)
+    await db.execute(
+        "insert into users (telegram_id, name, timezone) values (%s, 'other', 'Asia/Kolkata')",
+        other,
+    )
+    try:
+        await tools.create_todo(user, "my private task")
+        await tools.add_expense(user, 999, "my private expense", "food")
+        await tools.save_memory(user, "my secret", "hidden")
+        await tools.set_budget(user, 50000)
+
+        assert "my private task" not in await tools.list_todos(other)
+        assert "my private expense" not in await tools.list_expenses(other)
+        assert "hidden" not in await tools.recall_memory(other)
+        assert "999" not in await tools.expense_summary(other)
+        # The other user's budget must not leak in either.
+        assert "50,000" not in await tools.add_expense(other, 5, "their tea", "food")
+    finally:
+        await db.execute("delete from users where telegram_id = %s", other)
+
+
+@needs_db
 async def test_no_arg_tool_call_survives_null_arguments(user):
     """Groq sends the string "null" instead of "{}" for zero-argument tools."""
     from jarvis.handler import _run_tool
