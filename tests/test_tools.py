@@ -89,6 +89,35 @@ def test_month_bounds_are_local_not_utc():
     assert datetime(2026, 8, 1, 1, 0, tzinfo=tz) >= start
 
 
+async def test_read_url_refuses_private_and_non_http_addresses():
+    """The model picks this URL, possibly influenced by a page it just read."""
+    for blocked in (
+        "http://localhost:8080/admin",
+        "http://127.0.0.1/",
+        "http://169.254.169.254/latest/meta-data/",  # cloud metadata
+        "http://[::1]/",
+        "file:///etc/passwd",
+        "ftp://example.com/x",
+        "not a url",
+    ):
+        result = await tools.read_url(1, blocked)
+        assert "will not be fetched" in result or "Only http" in result or "resolve" in result, (
+            f"{blocked} was not blocked: {result}"
+        )
+
+
+def test_page_text_strips_markup_and_scripts():
+    parser = tools._PageText()
+    parser.feed(
+        "<html><head><style>body{color:red}</style></head>"
+        "<body><nav>Menu Home</nav><h1>Real Title</h1>"
+        "<script>alert('x')</script><p>Body text here.</p></body></html>"
+    )
+    text = " ".join(parser.parts)
+    assert "Real Title" in text and "Body text here." in text
+    assert "color:red" not in text and "alert" not in text and "Menu Home" not in text
+
+
 def test_every_tool_schema_has_a_handler():
     """A schema without a handler is a tool the model can call into a void."""
     named = {t["function"]["name"] for t in tools.TOOLS}

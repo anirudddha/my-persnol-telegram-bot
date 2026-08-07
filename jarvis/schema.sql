@@ -36,6 +36,13 @@ create table if not exists reminders (
 -- Polled every 30s by the tick loop, so keep the unsent set cheap to scan.
 create index if not exists reminders_pending on reminders (due_at) where sent_at is null;
 
+-- Webhook deliveries are retried by Telegram when a response is slow, and an LLM
+-- turn is slow. Polling does not need this; Cloud Run does.
+create table if not exists seen_updates (
+    update_id bigint primary key,
+    seen_at   timestamptz not null default now()
+);
+
 create table if not exists expenses (
     id          bigserial primary key,
     user_id     bigint         not null references users (telegram_id) on delete cascade,

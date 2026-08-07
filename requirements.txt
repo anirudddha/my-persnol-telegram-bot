@@ -4,3 +4,6 @@ httpx
 python-dotenv
 pytest
 pytest-asyncio
+ddgs
+fastapi
+uvicorn[standard]

@@ -34,7 +34,11 @@ Rules:
 - Save to memory only durable, useful facts, and prefer things the user asked you to
   remember.
 - Ask a follow-up only when the request is genuinely ambiguous. If a reminder has no
-  clear time, ask for one rather than guessing."""
+  clear time, ask for one rather than guessing.
+- For anything current, priced, or outside what you reliably know, search rather than
+  answering from memory. Say when a search found nothing instead of filling the gap.
+- Summarise search results in your own words and end with the URLs you actually used.
+  Never cite a source you did not open or a snippet you did not receive."""
 
 
 async def _complete(messages: list[dict]):

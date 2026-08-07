@@ -1,14 +1,15 @@
 # Jarvis — Telegram AI Assistant
 
-A personal assistant you talk to in Telegram. Todos, reminders, memory, and expense
-tracking, in plain language.
+A personal assistant you talk to in Telegram. Todos, reminders, memory, expense
+tracking, and web research, in plain language.
 
 > "spent 250 on lunch" · "remind me tomorrow at 8 to call the bank" · "how much did I
-> spend this month?" · "remember my locker key is in my bag"
+> spend this month?" · "remember my locker key is in my bag" · "compare these two phones"
 
-One Python process, long polling, Postgres. No web server, no public URL, no webhook.
+Runs two ways from one codebase: **long polling** on your own machine (section 2), or a
+**webhook on Cloud Run** (section 4). Postgres for storage, no other infrastructure.
 
-**Built:** MVP 1 (todos, reminders, memory) and MVP 2 (expenses).
+**Built:** MVP 1 (todos, reminders, memory), MVP 2 (expenses), MVP 3 (research).
 See `Jarvis_AI_Master_Build_Plan.md` for the full roadmap and what is deliberately
 not built yet.
 
@@ -174,7 +175,111 @@ what does my day look like?
 
 ---
 
-## 4. Tests
+## 4. Deploying to Google Cloud Run
+
+Cloud Run scales to zero and expects an HTTP server, so **long polling cannot be used
+there** — a polling loop gets shut down the moment there is no traffic. On Cloud Run the
+bot runs the other way round:
+
+```
+Telegram  ──push──▶  POST /telegram   ┐
+                                      ├─▶  same handler as local polling
+Cloud Scheduler ─────▶  POST /tick    ┘     (every minute, sends due reminders)
+```
+
+`jarvis/main.py` (polling) and `jarvis/web.py` (webhook) call the same
+`process_update()` and `deliver_due_reminders()`, so behaviour is identical.
+
+### 4.1 Deploy
+
+Cloud Build picks up the `Dockerfile` automatically. From the project directory:
+
+```bash
+gcloud auth login
+gcloud config set project YOUR_PROJECT_ID
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com cloudscheduler.googleapis.com
+
+# Invent a webhook secret and keep it — Telegram and Cloud Scheduler both need it.
+WEBHOOK_SECRET=$(openssl rand -hex 24); echo "$WEBHOOK_SECRET"
+
+gcloud run deploy jarvis \
+  --source . \
+  --region asia-south1 \
+  --allow-unauthenticated \
+  --set-env-vars "TELEGRAM_BOT_TOKEN=...,DATABASE_URL=...,GEMINI_API_KEY=...,GROQ_API_KEY=...,ALLOWED_TELEGRAM_IDS=1103318100,TIMEZONE=Asia/Kolkata,WEBHOOK_SECRET=$WEBHOOK_SECRET"
+```
+
+`--allow-unauthenticated` is required — Telegram cannot present a Google credential.
+Both endpoints check the secret header themselves, so they are not actually open.
+
+The tables are created automatically on first start; no `psql` needed.
+
+> Prefer Secret Manager over `--set-env-vars` for the real keys. Anything passed this way
+> is visible in the service description and in your shell history.
+
+### 4.2 Point Telegram at it
+
+```bash
+URL=$(gcloud run services describe jarvis --region asia-south1 --format 'value(status.url)')
+
+curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
+  -d "url=$URL/telegram" \
+  -d "secret_token=$WEBHOOK_SECRET"
+```
+
+Telegram sends the secret back in the `X-Telegram-Bot-Api-Secret-Token` header on every
+request, which is what `/telegram` checks.
+
+Check it took:
+
+```bash
+curl -s "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"
+```
+
+`pending_update_count` should be 0 and `last_error_message` absent.
+
+### 4.3 Schedule the reminders
+
+Without this, reminders never fire — nothing is running between messages.
+
+```bash
+gcloud scheduler jobs create http jarvis-tick \
+  --location asia-south1 \
+  --schedule "* * * * *" \
+  --uri "$URL/tick" \
+  --http-method POST \
+  --headers "X-Jarvis-Secret=$WEBHOOK_SECRET"
+```
+
+Every minute is the finest Cloud Scheduler allows, so a reminder can be up to a minute
+late. Three jobs are free.
+
+### 4.4 Going back to local polling
+
+```bash
+curl "https://api.telegram.org/bot<TOKEN>/deleteWebhook"
+```
+
+A bot cannot use a webhook and `getUpdates` at the same time — while a webhook is set,
+local polling receives nothing.
+
+### 4.5 Checking on it
+
+```bash
+gcloud run services logs tail jarvis --region asia-south1
+curl "$URL/health"                       # {"ok":true}, no secret needed
+```
+
+| Symptom | Cause |
+|---|---|
+| Telegram silent, `getWebhookInfo` shows 403 | `WEBHOOK_SECRET` differs from the one given to `setWebhook` |
+| Container fails to start | A missing env var — the log names it exactly |
+| Reminders never arrive | Cloud Scheduler job missing, or its header secret is wrong |
+| Replies arrive twice | Two deliveries of one update; `seen_updates` should prevent it — check the table exists |
+
+---
+
+## 5. Tests
 
 ```bash
 .venv/bin/pytest
@@ -185,16 +290,19 @@ and use a throwaway user id that is deleted afterwards — your real data is unt
 
 ---
 
-## 5. Layout
+## 6. Layout
 
 ```
 jarvis/
-  main.py      Polling loop + the 30s reminder tick
+  main.py      Local entrypoint: polling loop, reminder tick, and the shared
+               process_update() / deliver_due_reminders() both modes call
+  web.py       Cloud Run entrypoint: /telegram, /tick, /health
   handler.py   Message → LLM with tools → reply. This is the planner.
-  tools.py     The 16 actions, plus the schemas the model sees
+  tools.py     The 18 actions, plus the schemas the model sees
   db.py        Connection pool and three query helpers
   config.py    Env vars, validated at startup
-  schema.sql   Six tables
+  schema.sql   Seven tables
+Dockerfile     Cloud Run image; Cloud Build uses it automatically
 tests/
 ```
 
@@ -203,7 +311,7 @@ Adding a capability means writing a function in `tools.py` and adding its schema
 
 ---
 
-## 6. Troubleshooting
+## 7. Troubleshooting
 
 **`missing required env var: X`** — `.env` is incomplete, or you are running from the
 wrong directory. `.env` is read relative to where you launch the command.
@@ -230,16 +338,21 @@ throttles sooner.
 
 ---
 
-## 7. Design notes
+## 8. Design notes
 
-**Why long polling and no FastAPI.** No public URL, no ngrok, no webhook secret, and
-Telegram's `offset` gives update de-duplication for free. The move to Cloud Run adds a
-webhook endpoint calling the same `handle_message()`.
+**Why long polling locally.** No public URL, no ngrok, no webhook secret, and Telegram's
+`offset` gives update de-duplication for free. Cloud Run cannot use it — it scales to
+zero and expects HTTP — so `web.py` adds the webhook over the same functions.
 
 **Why reminders are polled from the database** rather than an in-process scheduler.
-Cloud Run scales to zero and runs multiple instances — an in-process scheduler would
-fire N times on N instances, or never on a sleeping container. This design becomes a
-`/tick` endpoint driven by Cloud Scheduler with a ten-line change.
+Cloud Run scales to zero and runs multiple instances; an in-process scheduler would fire
+N times on N instances, or never on a sleeping container. Because the due list lives in
+the database, the same sweep works as a local loop and as a `/tick` endpoint.
+
+**Why `seen_updates` exists.** A webhook has no `offset`. Telegram retries whenever a
+response is slow, and an LLM turn takes seconds — so without an idempotency check, one
+message logs the expense twice. The table records each `update_id` and the second
+delivery returns immediately.
 
 **Why one model with 16 tools** instead of separate todo/reminder/expense agents. Three
 agent classes mean three LLM calls and three times the latency for the same reply. The

@@ -30,5 +30,8 @@ except ValueError as exc:
 
 TIMEZONE = os.getenv("TIMEZONE", "Asia/Kolkata")
 CURRENCY = os.getenv("CURRENCY", "₹")
+
+# Only needed by the Cloud Run webhook; polling locally does not use it.
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 MODEL = os.getenv("MODEL", "gemini/gemini-3.5-flash-lite")
 FALLBACK_MODEL = os.getenv("FALLBACK_MODEL", "groq/llama-3.3-70b-versatile")

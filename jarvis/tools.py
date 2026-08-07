@@ -1,8 +1,16 @@
 """Every action Jarvis can take. Plain async functions returning plain strings —
 the model reads the string and phrases the reply itself."""
 
+import asyncio
+import ipaddress
+import socket
 from datetime import datetime, timedelta
+from html.parser import HTMLParser
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
+
+import httpx
+from ddgs import DDGS
 
 from . import db
 from .config import CURRENCY, TIMEZONE
@@ -364,6 +372,96 @@ async def set_budget(user_id: int, amount: float) -> str:
     return f"Monthly budget set to {_money(amount)}."
 
 
+# --- research ------------------------------------------------------------
+
+SEARCH_RESULTS = 5
+PAGE_CHAR_LIMIT = 6000
+PAGE_BYTE_LIMIT = 2_000_000
+
+
+class _PageText(HTMLParser):
+    """Just enough HTML stripping to summarise an article. No parser dependency."""
+
+    SKIP = {"script", "style", "nav", "header", "footer", "noscript", "svg", "form", "aside"}
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.parts: list[str] = []
+        self._depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.SKIP:
+            self._depth += 1
+
+    def handle_endtag(self, tag):
+        if tag in self.SKIP and self._depth:
+            self._depth -= 1
+
+    def handle_data(self, data):
+        if not self._depth and (text := data.strip()):
+            self.parts.append(text)
+
+
+def _safe_url(url: str) -> str | None:
+    """Reject anything that is not a public http(s) address.
+
+    The model chooses this URL, and it may be doing so under the influence of a
+    page it just read, so a fetch here can be steered. Without this check that
+    is a route to services listening on localhost.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return "Only http and https addresses can be read."
+    try:
+        for *_, sockaddr in socket.getaddrinfo(parsed.hostname, None):
+            if ipaddress.ip_address(sockaddr[0]).is_global is False:
+                return "That address is on a private network and will not be fetched."
+    except (socket.gaierror, ValueError):
+        return f"Could not resolve {parsed.hostname}."
+    return None
+
+
+async def search_web(user_id: int, query: str, max_results: int = SEARCH_RESULTS) -> str:
+    """Snippets only. The caller's own model does the summarising and comparing."""
+    try:
+        # ddgs is blocking, so keep it off the event loop that also serves Telegram.
+        results = await asyncio.to_thread(
+            lambda: DDGS().text(query, max_results=max(1, min(max_results, 10)))
+        )
+    except Exception as exc:
+        return f"Search failed: {exc}"
+    if not results:
+        return f"No results for '{query}'."
+    return "\n\n".join(
+        f"[{i}] {r['title']}\n{r['href']}\n{r.get('body', '')}"
+        for i, r in enumerate(results, 1)
+    )
+
+
+async def read_url(user_id: int, url: str) -> str:
+    if problem := _safe_url(url):
+        return problem
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+            response = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (Jarvis)"})
+            response.raise_for_status()
+    except Exception as exc:
+        return f"Could not fetch {url}: {exc}"
+    if len(response.content) > PAGE_BYTE_LIMIT:
+        return f"{url} is too large to read."
+    if "html" not in response.headers.get("content-type", "") and not response.text.strip():
+        return f"{url} returned no readable text."
+
+    parser = _PageText()
+    parser.feed(response.text)
+    text = " ".join(parser.parts)
+    if not text:
+        return f"No readable text found at {url}."
+    if len(text) > PAGE_CHAR_LIMIT:
+        text = text[:PAGE_CHAR_LIMIT] + " […truncated]"
+    return text
+
+
 # --- summary -------------------------------------------------------------
 
 
@@ -405,6 +503,8 @@ HANDLERS = {
         delete_expense,
         expense_summary,
         set_budget,
+        search_web,
+        read_url,
     )
 }
 
@@ -512,5 +612,24 @@ TOOLS = [
         "Set the user's monthly spending budget. Pass 0 to clear it.",
         {"amount": {"type": "number"}},
         ["amount"],
+    ),
+    _tool(
+        "search_web",
+        "Search the web and get titles, URLs and short snippets. Use for anything "
+        "current, factual or outside your knowledge — prices, news, releases, "
+        "comparisons. Snippets are short: call read_url on a result when you need "
+        "the detail.",
+        {
+            "query": {**_STR, "description": "Search terms, not a full sentence."},
+            "max_results": {"type": "integer", "description": "1-10, default 5."},
+        },
+        ["query"],
+    ),
+    _tool(
+        "read_url",
+        "Fetch a web page and return its text, for summarising an article or getting "
+        "detail a search snippet only hinted at.",
+        {"url": {**_STR, "description": "Full http(s) URL."}},
+        ["url"],
     ),
 ]
