@@ -271,6 +271,50 @@ async def test_last_month_summary_is_separate_from_this_month(user):
 
 
 @needs_db
+async def test_concurrent_sweeps_send_a_reminder_only_once(user):
+    """A local bot and Cloud Run — or two Cloud Run instances — share one database."""
+    import asyncio
+
+    from jarvis.main import deliver_due_reminders
+
+    sent: list[str] = []
+
+    class RecordingClient:
+        async def post(self, _path, json):
+            sent.append(json["text"])
+
+    await tools.create_reminder(
+        user, "stretch", (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    )
+    client = RecordingClient()
+    counts = await asyncio.gather(deliver_due_reminders(client), deliver_due_reminders(client))
+
+    assert len([t for t in sent if "stretch" in t]) == 1, f"sent twice: {sent}"
+    assert sorted(counts) == [0, 1]
+
+
+@needs_db
+async def test_failed_send_leaves_reminder_for_the_next_sweep(user):
+    """Claiming a reminder must not lose it when Telegram is unreachable."""
+    from jarvis.main import deliver_due_reminders
+
+    class BrokenClient:
+        async def post(self, _path, json):
+            raise RuntimeError("telegram down")
+
+    await tools.create_reminder(
+        user, "call bank", (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    )
+    with pytest.raises(RuntimeError):
+        await deliver_due_reminders(BrokenClient())
+
+    row = await db.fetchone(
+        "select sent_at from reminders where user_id = %s and text = 'call bank'", user
+    )
+    assert row["sent_at"] is None, "reminder was marked sent despite the send failing"
+
+
+@needs_db
 async def test_no_arg_tool_call_survives_null_arguments(user):
     """Groq sends the string "null" instead of "{}" for zero-argument tools."""
     from jarvis.handler import _run_tool

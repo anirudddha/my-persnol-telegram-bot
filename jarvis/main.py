@@ -66,14 +66,28 @@ async def process_update(client: httpx.AsyncClient, update: dict) -> None:
 
 
 async def deliver_due_reminders(client: httpx.AsyncClient) -> int:
-    """Send every reminder that has come due. Returns how many went out."""
-    due = await db.fetch(
-        "select id, user_id, text, due_at, recurrence from reminders"
-        " where sent_at is null and due_at <= now() order by due_at"
+    """Send every reminder that has come due. Returns how many went out.
+
+    The claim is a single UPDATE ... RETURNING rather than a SELECT followed by
+    an UPDATE, so that two sweepers cannot both pick up the same row. That
+    happens routinely: Cloud Run runs several instances, and a local bot may be
+    running against the same database. Row locking means the loser claims
+    nothing and stays silent.
+    """
+    claimed = await db.fetch(
+        "update reminders set sent_at = now()"
+        " where sent_at is null and due_at <= now()"
+        " returning id, user_id, text, due_at, recurrence"
     )
-    for reminder in due:
-        await send(client, reminder["user_id"], f"⏰ {reminder['text']}")
-        await db.execute("update reminders set sent_at = now() where id = %s", reminder["id"])
+    for reminder in claimed:
+        try:
+            await send(client, reminder["user_id"], f"⏰ {reminder['text']}")
+        except Exception:
+            # Un-claim, so the next sweep retries rather than losing it silently.
+            await db.execute(
+                "update reminders set sent_at = null where id = %s", reminder["id"]
+            )
+            raise
         if reminder["recurrence"]:
             following = tools.next_occurrence(
                 reminder["due_at"], reminder["recurrence"], datetime.now(timezone.utc)
@@ -89,7 +103,7 @@ async def deliver_due_reminders(client: httpx.AsyncClient) -> int:
                 )
     # Keeps the de-duplication table from growing without bound.
     await db.execute("delete from seen_updates where seen_at < now() - interval '2 days'")
-    return len(due)
+    return len(claimed)
 
 
 async def poll_telegram(client: httpx.AsyncClient) -> None:

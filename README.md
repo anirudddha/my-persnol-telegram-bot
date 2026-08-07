@@ -112,11 +112,14 @@ kill $(cat jarvis.pid)
 > Do **not** stop it with `pkill -f jarvis.main`. That pattern matches the shell running
 > the command, so it kills your own terminal along with the bot. Use the PID file.
 
-Confirm exactly one copy is running — two instances double-send every reminder:
+Check how many copies are running:
 
 ```bash
 pgrep -af 'bin/python -m jarvis'
 ```
+
+A second copy will not double-send reminders — the sweep claims them atomically — but
+both will fight over `getUpdates`, so each gets an erratic half of your messages. Run one.
 
 ---
 
@@ -254,7 +257,21 @@ gcloud scheduler jobs create http jarvis-tick \
 Every minute is the finest Cloud Scheduler allows, so a reminder can be up to a minute
 late. Three jobs are free.
 
-### 4.4 Going back to local polling
+### 4.4 What if both local and Cloud Run are running?
+
+Nothing breaks, but the local one becomes useless:
+
+- **Messages** go only to Cloud Run. Telegram allows one delivery mode at a time, so
+  while a webhook is set the local `getUpdates` returns `409 Conflict` and receives
+  nothing. It retries in a loop and fills `jarvis.log` with errors.
+- **Reminders** are sent once, not twice. Both processes sweep the same table, but the
+  sweep claims rows with a single `UPDATE ... RETURNING`, so row locking means only one
+  wins. The same protection covers two Cloud Run instances, which happens whenever it
+  scales out.
+
+So it is safe, just pointless. Stop the local one to keep the logs clean.
+
+### 4.5 Going back to local polling
 
 ```bash
 curl "https://api.telegram.org/bot<TOKEN>/deleteWebhook"
@@ -263,7 +280,7 @@ curl "https://api.telegram.org/bot<TOKEN>/deleteWebhook"
 A bot cannot use a webhook and `getUpdates` at the same time — while a webhook is set,
 local polling receives nothing.
 
-### 4.5 Checking on it
+### 4.6 Checking on it
 
 ```bash
 gcloud run services logs tail jarvis --region asia-south1
