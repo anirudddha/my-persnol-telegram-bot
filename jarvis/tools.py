@@ -19,15 +19,20 @@ RECURRENCE_STEP = {"daily": timedelta(days=1), "weekly": timedelta(weeks=1)}
 
 
 async def user_tz(user_id: int) -> ZoneInfo:
+    """
+    Purpose: Fetches the user's saved timezone from PostgreSQL database as a ZoneInfo object.
+    Called by: create_reminder(), list_reminders(), add_expense(), list_expenses(), expense_summary(), daily_summary(), _budget_note(), handler.handle_message().
+    Calls: db.fetchone()
+    """
     row = await db.fetchone("select timezone from users where telegram_id = %s", user_id)
     return ZoneInfo(row["timezone"] if row else TIMEZONE)
 
 
 def next_occurrence(due_at: datetime, recurrence: str, now: datetime) -> datetime | None:
-    """Next firing strictly after `now`, rolling forward over missed ones.
-
-    Without the roll-forward, a bot that was offline for a week would fire seven
-    catch-up copies of a daily reminder on restart.
+    """
+    Purpose: Calculates the next firing datetime for daily or weekly recurring reminders strictly after now.
+    Called by: main.deliver_due_reminders().
+    Calls: Datetime addition via RECURRENCE_STEP
     """
     step = RECURRENCE_STEP.get(recurrence)
     if not step:
@@ -41,6 +46,11 @@ def next_occurrence(due_at: datetime, recurrence: str, now: datetime) -> datetim
 
 
 def _fmt(dt: datetime, tz: ZoneInfo) -> str:
+    """
+    Purpose: Formats a datetime object into a user-friendly string (e.g. 'Mon 07 Aug, 08:00') in user's timezone.
+    Called by: create_reminder(), list_reminders(), daily_summary().
+    Calls: dt.astimezone(), dt.strftime()
+    """
     return dt.astimezone(tz).strftime("%a %d %b, %H:%M")
 
 
@@ -48,10 +58,10 @@ def _fmt(dt: datetime, tz: ZoneInfo) -> str:
 
 
 async def _recent_duplicate(table: str, user_id: int, **columns) -> dict | None:
-    """An identical row written moments ago is almost never a real second entry.
-
-    Guards every write path at once: a model that re-issues a tool call while
-    answering an unrelated question, a Telegram redelivery, a double tap.
+    """
+    Purpose: Checks if an identical record was added in the past 2 minutes to prevent duplicate writes.
+    Called by: create_todo(), add_expense().
+    Calls: db.fetchone()
     """
     where = "".join(f" and {name} = %s" for name in columns)
     return await db.fetchone(
@@ -63,6 +73,11 @@ async def _recent_duplicate(table: str, user_id: int, **columns) -> dict | None:
 
 
 async def create_todo(user_id: int, text: str) -> str:
+    """
+    Purpose: Creates a new todo task in the database for the user.
+    Called by: handler._run_tool() (via AI tool call 'create_todo').
+    Calls: _recent_duplicate(), db.fetchone()
+    """
     if existing := await _recent_duplicate("todos", user_id, text=text):
         return f"'{text}' is already on the list as #{existing['id']} — not adding it twice."
     row = await db.fetchone(
@@ -72,6 +87,11 @@ async def create_todo(user_id: int, text: str) -> str:
 
 
 async def list_todos(user_id: int, include_done: bool = False) -> str:
+    """
+    Purpose: Lists all active (and optionally completed) todo tasks for the user.
+    Called by: handler._run_tool() (via AI tool call 'list_todos').
+    Calls: db.fetch()
+    """
     sql = "select id, text, done from todos where user_id = %s"
     if not include_done:
         sql += " and not done"
@@ -84,6 +104,11 @@ async def list_todos(user_id: int, include_done: bool = False) -> str:
 
 
 async def complete_todo(user_id: int, todo_id: int) -> str:
+    """
+    Purpose: Marks a specific todo task as completed in the database.
+    Called by: handler._run_tool() (via AI tool call 'complete_todo').
+    Calls: db.fetchone()
+    """
     row = await db.fetchone(
         "update todos set done = true where id = %s and user_id = %s returning text",
         todo_id,
@@ -93,6 +118,11 @@ async def complete_todo(user_id: int, todo_id: int) -> str:
 
 
 async def delete_todo(user_id: int, todo_id: int) -> str:
+    """
+    Purpose: Removes a todo task from the database by ID.
+    Called by: handler._run_tool() (via AI tool call 'delete_todo').
+    Calls: db.fetchone()
+    """
     row = await db.fetchone(
         "delete from todos where id = %s and user_id = %s returning text", todo_id, user_id
     )
@@ -105,6 +135,11 @@ async def delete_todo(user_id: int, todo_id: int) -> str:
 async def create_reminder(
     user_id: int, text: str, due_at: str, recurrence: str | None = None
 ) -> str:
+    """
+    Purpose: Schedules a new one-off or recurring reminder in the reminders table.
+    Called by: handler._run_tool() (via AI tool call 'create_reminder').
+    Calls: user_tz(), _fmt(), db.fetchone()
+    """
     tz = await user_tz(user_id)
     try:
         when = datetime.fromisoformat(due_at)
@@ -127,6 +162,11 @@ async def create_reminder(
 
 
 async def list_reminders(user_id: int) -> str:
+    """
+    Purpose: Lists all upcoming pending (unsent) reminders for the user.
+    Called by: handler._run_tool() (via AI tool call 'list_reminders').
+    Calls: user_tz(), _fmt(), db.fetch()
+    """
     tz = await user_tz(user_id)
     rows = await db.fetch(
         "select id, text, due_at, recurrence from reminders"
@@ -143,6 +183,11 @@ async def list_reminders(user_id: int) -> str:
 
 
 async def delete_reminder(user_id: int, reminder_id: int) -> str:
+    """
+    Purpose: Cancels and removes a scheduled reminder from the database.
+    Called by: handler._run_tool() (via AI tool call 'delete_reminder').
+    Calls: db.fetchone()
+    """
     row = await db.fetchone(
         "delete from reminders where id = %s and user_id = %s returning text",
         reminder_id,
@@ -155,6 +200,11 @@ async def delete_reminder(user_id: int, reminder_id: int) -> str:
 
 
 async def save_memory(user_id: int, key: str, value: str) -> str:
+    """
+    Purpose: Stores or updates a durable key-value fact about the user in memory_items.
+    Called by: handler._run_tool() (via AI tool call 'save_memory').
+    Calls: db.execute()
+    """
     await db.execute(
         "insert into memory_items (user_id, key, value) values (%s, %s, %s)"
         " on conflict (user_id, key) do update set value = excluded.value",
@@ -166,6 +216,11 @@ async def save_memory(user_id: int, key: str, value: str) -> str:
 
 
 async def recall_memory(user_id: int, query: str | None = None) -> str:
+    """
+    Purpose: Retrieves stored facts matching an optional search query string.
+    Called by: handler._run_tool() (via AI tool call 'recall_memory').
+    Calls: db.fetch()
+    """
     sql = "select key, value from memory_items where user_id = %s"
     args: tuple = (user_id,)
     if query:
@@ -178,6 +233,11 @@ async def recall_memory(user_id: int, query: str | None = None) -> str:
 
 
 async def forget_memory(user_id: int, key: str) -> str:
+    """
+    Purpose: Deletes a stored key-value fact from memory_items.
+    Called by: handler._run_tool() (via AI tool call 'forget_memory').
+    Calls: db.fetchone()
+    """
     row = await db.fetchone(
         "delete from memory_items where user_id = %s and key = %s returning key", user_id, key
     )
@@ -199,10 +259,10 @@ CATEGORIES = [
 
 
 def month_bounds(tz: ZoneInfo, offset: int = 0, today: datetime | None = None):
-    """Half-open [start, end) of a calendar month in the user's own timezone.
-
-    offset=0 is this month, -1 last month. Month arithmetic is done on an
-    index so December and January roll the year correctly.
+    """
+    Purpose: Calculates start and end timestamps for a calendar month in user's timezone.
+    Called by: _budget_note(), expense_summary().
+    Calls: datetime arithmetic
     """
     now = today or datetime.now(tz)
     index = now.year * 12 + (now.month - 1) + offset
@@ -216,10 +276,20 @@ def month_bounds(tz: ZoneInfo, offset: int = 0, today: datetime | None = None):
 
 
 def _money(amount) -> str:
+    """
+    Purpose: Formats a numeric amount into a currency string (e.g. '₹250').
+    Called by: _budget_note(), add_expense(), list_expenses(), delete_expense(), expense_summary(), set_budget().
+    Calls: String formatting
+    """
     return f"{CURRENCY}{amount:,.2f}".replace(".00", "")
 
 
 async def _budget_note(user_id: int, tz: ZoneInfo) -> str:
+    """
+    Purpose: Computes current monthly spending against budget limit and returns warning status.
+    Called by: add_expense().
+    Calls: db.fetchone(), month_bounds(), _money()
+    """
     row = await db.fetchone("select monthly_budget from users where telegram_id = %s", user_id)
     budget = row and row["monthly_budget"]
     if not budget:
@@ -249,6 +319,11 @@ async def add_expense(
     category: str = "other",
     spent_at: str | None = None,
 ) -> str:
+    """
+    Purpose: Records a monetary expense in the database and returns a budget note.
+    Called by: handler._run_tool() (via AI tool call 'add_expense').
+    Calls: user_tz(), _recent_duplicate(), db.fetchone(), _budget_note(), _money()
+    """
     if amount <= 0:
         return "Amount must be positive."
     if category not in CATEGORIES:
@@ -285,6 +360,11 @@ async def add_expense(
 
 
 async def list_expenses(user_id: int, category: str | None = None, days: int = 7) -> str:
+    """
+    Purpose: Lists individual recent expense transactions for a specified number of days/category.
+    Called by: handler._run_tool() (via AI tool call 'list_expenses').
+    Calls: user_tz(), db.fetch(), _money()
+    """
     tz = await user_tz(user_id)
     sql = "select id, amount, description, category, spent_at from expenses" " where user_id = %s and spent_at >= now() - make_interval(days => %s)"
     args: tuple = (user_id, days)
@@ -304,6 +384,11 @@ async def list_expenses(user_id: int, category: str | None = None, days: int = 7
 
 
 async def delete_expense(user_id: int, expense_id: int) -> str:
+    """
+    Purpose: Deletes a logged expense record from the database by ID.
+    Called by: handler._run_tool() (via AI tool call 'delete_expense').
+    Calls: db.fetchone(), _money()
+    """
     row = await db.fetchone(
         "delete from expenses where id = %s and user_id = %s returning amount, description",
         expense_id,
@@ -315,7 +400,11 @@ async def delete_expense(user_id: int, expense_id: int) -> str:
 
 
 async def expense_summary(user_id: int, months_ago: int = 0) -> str:
-    """Category breakdown for one month, with the change against the month before."""
+    """
+    Purpose: Calculates category breakdown, monthly totals, month-over-month % change, and budget remaining for a given month.
+    Called by: handler._run_tool() (via AI tool call 'expense_summary').
+    Calls: user_tz(), month_bounds(), db.fetch(), db.fetchone(), _money()
+    """
     tz = await user_tz(user_id)
     start, end = month_bounds(tz, -abs(months_ago))
     rows = await db.fetch(
@@ -361,6 +450,11 @@ async def expense_summary(user_id: int, months_ago: int = 0) -> str:
 
 
 async def set_budget(user_id: int, amount: float) -> str:
+    """
+    Purpose: Sets or clears (if 0) the user's monthly expense budget in the database.
+    Called by: handler._run_tool() (via AI tool call 'set_budget').
+    Calls: db.execute(), _money()
+    """
     if amount <= 0:
         await db.execute(
             "update users set monthly_budget = null where telegram_id = %s", user_id
@@ -403,11 +497,10 @@ class _PageText(HTMLParser):
 
 
 def _safe_url(url: str) -> str | None:
-    """Reject anything that is not a public http(s) address.
-
-    The model chooses this URL, and it may be doing so under the influence of a
-    page it just read, so a fetch here can be steered. Without this check that
-    is a route to services listening on localhost.
+    """
+    Purpose: Validates that a web URL is a public http(s) address and prevents SSRF access to internal IPs.
+    Called by: read_url().
+    Calls: urlparse(), socket.getaddrinfo(), ipaddress.ip_address()
     """
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
@@ -422,7 +515,11 @@ def _safe_url(url: str) -> str | None:
 
 
 async def search_web(user_id: int, query: str, max_results: int = SEARCH_RESULTS) -> str:
-    """Snippets only. The caller's own model does the summarising and comparing."""
+    """
+    Purpose: Performs DuckDuckGo web search in a non-blocking thread pool and returns search result snippets.
+    Called by: handler._run_tool() (via AI tool call 'search_web').
+    Calls: asyncio.to_thread(), DDGS().text()
+    """
     try:
         # ddgs is blocking, so keep it off the event loop that also serves Telegram.
         results = await asyncio.to_thread(
@@ -439,6 +536,11 @@ async def search_web(user_id: int, query: str, max_results: int = SEARCH_RESULTS
 
 
 async def read_url(user_id: int, url: str) -> str:
+    """
+    Purpose: Fetches a public web page, strips HTML tags using _PageText, and returns readable plain text.
+    Called by: handler._run_tool() (via AI tool call 'read_url').
+    Calls: _safe_url(), httpx.AsyncClient.get(), _PageText HTML parser
+    """
     if problem := _safe_url(url):
         return problem
     try:
@@ -466,6 +568,11 @@ async def read_url(user_id: int, url: str) -> str:
 
 
 async def daily_summary(user_id: int) -> str:
+    """
+    Purpose: Fetches all open todo items and reminders due in the next 24 hours for the user.
+    Called by: handler._run_tool() (via AI tool call 'daily_summary').
+    Calls: user_tz(), db.fetch(), _fmt()
+    """
     tz = await user_tz(user_id)
     todos = await db.fetch(
         "select id, text from todos where user_id = %s and not done order by created_at", user_id
@@ -510,6 +617,11 @@ HANDLERS = {
 
 
 def _tool(name: str, description: str, properties: dict, required: list[str]) -> dict:
+    """
+    Purpose: Constructs a standardized function-calling tool schema dict for LLM consumption.
+    Called by: Top-level TOOLS list initialization.
+    Calls: Dictionary constructors
+    """
     return {
         "type": "function",
         "function": {

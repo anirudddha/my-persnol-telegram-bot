@@ -24,17 +24,21 @@ TELEGRAM_MAX_CHARS = 4096
 
 
 async def send(client: httpx.AsyncClient, chat_id: int, text: str) -> None:
+    """
+    Purpose: Sends a text message back to a Telegram chat via Telegram Bot API.
+    Called by: process_update() and deliver_due_reminders().
+    Calls: httpx.AsyncClient.post()
+    """
     await client.post(
         "/sendMessage", json={"chat_id": chat_id, "text": text[:TELEGRAM_MAX_CHARS]}
     )
 
 
 async def already_seen(update_id: int | None) -> bool:
-    """True if this update was handled before.
-
-    Polling gets de-duplication free from the `offset` parameter, but a webhook
-    does not: Telegram redelivers whenever a response is slow or fails, and an
-    LLM turn is slow. Without this, one message books the same reminder twice.
+    """
+    Purpose: Prevents processing duplicate Telegram messages by tracking seen update IDs in the database.
+    Called by: process_update().
+    Calls: db.fetchone()
     """
     if update_id is None:
         return False
@@ -47,7 +51,11 @@ async def already_seen(update_id: int | None) -> bool:
 
 
 async def process_update(client: httpx.AsyncClient, update: dict) -> None:
-    """Handle one Telegram update. Safe to call twice with the same update."""
+    """
+    Purpose: Receives a single Telegram update message, sends it to handler.handle_message(), and replies via send().
+    Called by: poll_telegram() (and webhook endpoint).
+    Calls: already_seen(), handler.handle_message(), send()
+    """
     message = update.get("message") or {}
     text = message.get("text")
     if not text:
@@ -66,13 +74,10 @@ async def process_update(client: httpx.AsyncClient, update: dict) -> None:
 
 
 async def deliver_due_reminders(client: httpx.AsyncClient) -> int:
-    """Send every reminder that has come due. Returns how many went out.
-
-    The claim is a single UPDATE ... RETURNING rather than a SELECT followed by
-    an UPDATE, so that two sweepers cannot both pick up the same row. That
-    happens routinely: Cloud Run runs several instances, and a local bot may be
-    running against the same database. Row locking means the loser claims
-    nothing and stays silent.
+    """
+    Purpose: Sweeps database for pending reminders due <= now(), delivers them to Telegram, and handles recurring ones.
+    Called by: reminder_tick() (and scheduled tick endpoint).
+    Calls: db.fetch(), send(), db.execute(), tools.next_occurrence()
     """
     claimed = await db.fetch(
         "update reminders set sent_at = now()"
@@ -107,6 +112,11 @@ async def deliver_due_reminders(client: httpx.AsyncClient) -> int:
 
 
 async def poll_telegram(client: httpx.AsyncClient) -> None:
+    """
+    Purpose: Continuously polls Telegram /getUpdates API in an infinite loop to receive new user messages.
+    Called by: main().
+    Calls: httpx.AsyncClient.get(), process_update(), asyncio.sleep()
+    """
     offset = None
     while True:
         try:
@@ -128,6 +138,11 @@ async def poll_telegram(client: httpx.AsyncClient) -> None:
 
 
 async def reminder_tick(client: httpx.AsyncClient) -> None:
+    """
+    Purpose: Runs an infinite background timer loop waking up every 30 seconds to check and send due reminders.
+    Called by: main().
+    Calls: deliver_due_reminders(), asyncio.sleep()
+    """
     while True:
         try:
             await deliver_due_reminders(client)
@@ -137,6 +152,11 @@ async def reminder_tick(client: httpx.AsyncClient) -> None:
 
 
 async def main() -> None:
+    """
+    Purpose: Application entrypoint. Starts DB pool, opens HTTP client, and starts polling + reminder loops concurrently.
+    Called by: Script runner (if __name__ == "__main__").
+    Calls: db.open_pool(), httpx.AsyncClient(), asyncio.gather(poll_telegram(), reminder_tick()), db.close_pool()
+    """
     await db.open_pool()
     # Read timeout must outlast the long poll, or every poll raises.
     async with httpx.AsyncClient(base_url=API, timeout=POLL_TIMEOUT + 10) as client:

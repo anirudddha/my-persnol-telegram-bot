@@ -42,6 +42,11 @@ Rules:
 
 
 async def _complete(messages: list[dict]):
+    """
+    Purpose: Calls Gemini LLM via LiteLLM for completion, with automatic fallback to Groq Llama if primary model fails.
+    Called by: handle_message().
+    Calls: litellm.acompletion()
+    """
     try:
         return await litellm.acompletion(model=MODEL, messages=messages, tools=tools.TOOLS)
     except Exception:
@@ -54,11 +59,10 @@ async def _complete(messages: list[dict]):
 
 
 def _as_assistant_turn(message) -> dict:
-    """Rebuild the assistant turn from scratch before sending it back.
-
-    A provider's response object carries its own extra fields (Gemini adds
-    `images`), and echoing those to a different provider on fallback is a 400.
-    Only these three keys are portable.
+    """
+    Purpose: Rebuilds clean, portable assistant message dict (role, content, tool_calls) stripping provider-specific extra fields.
+    Called by: handle_message().
+    Calls: Dictionary constructors
     """
     turn = {"role": "assistant", "content": message.content or ""}
     if message.tool_calls:
@@ -77,6 +81,11 @@ def _as_assistant_turn(message) -> dict:
 
 
 async def _run_tool(user_id: int, name: str, raw_args: str) -> str:
+    """
+    Purpose: Looks up and executes a tool function from tools.HANDLERS, passing JSON-parsed arguments safely.
+    Called by: handle_message().
+    Calls: Tool function in jarvis.tools (e.g., create_todo, add_expense, search_web, etc.)
+    """
     handler = tools.HANDLERS.get(name)
     if not handler:
         return f"Error: no such tool '{name}'."
@@ -93,6 +102,11 @@ async def _run_tool(user_id: int, name: str, raw_args: str) -> str:
 
 
 async def handle_message(telegram_id: int, text: str, name: str | None = None) -> str:
+    """
+    Purpose: Main entry point for processing a user's Telegram message through the AI model and tool-execution loop.
+    Called by: jarvis.main (process_update()).
+    Calls: db.execute(), db.fetch(), tools.user_tz(), _complete(), _as_assistant_turn(), _run_tool()
+    """
     if telegram_id not in ALLOWED_TELEGRAM_IDS:
         log.warning("rejected message from %s", telegram_id)
         return "This is a private assistant and you are not on its list."

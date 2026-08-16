@@ -6,6 +6,11 @@ load_dotenv()
 
 
 def _required(name: str) -> str:
+    """
+    Purpose: Reads an environment variable and ensures it is set. Exits program if missing.
+    Called by: Top-level module variables (TELEGRAM_BOT_TOKEN, DATABASE_URL, GEMINI_API_KEY, ALLOWED_TELEGRAM_IDS).
+    Calls: os.getenv(), SystemExit().
+    """
     value = os.getenv(name)
     if not value:
         raise SystemExit(f"missing required env var: {name} — see .env.example")
