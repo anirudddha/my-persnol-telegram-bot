@@ -71,7 +71,7 @@ also how schema changes get applied. There are no migration files.
 Foreground, while testing:
 
 ```bash
-.venv/bin/python -m jarvis.main
+.venv/Scripts/python -m jarvis.main
 ```
 
 Logs `jarvis up` when ready. `Ctrl-C` to stop.
