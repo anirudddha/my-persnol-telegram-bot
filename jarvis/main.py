@@ -85,8 +85,15 @@ async def deliver_due_reminders(client: httpx.AsyncClient) -> int:
         " returning id, user_id, text, due_at, recurrence"
     )
     for reminder in claimed:
+        reminder_text = f"⏰ {reminder['text']}"
         try:
-            await send(client, reminder["user_id"], f"⏰ {reminder['text']}")
+            await send(client, reminder["user_id"], reminder_text)
+            # Record reminder in messages table so it appears in Web Chat and history
+            await db.execute(
+                "insert into messages (user_id, role, content) values (%s, 'assistant', %s)",
+                reminder["user_id"],
+                reminder_text,
+            )
         except Exception:
             # Un-claim, so the next sweep retries rather than losing it silently.
             await db.execute(

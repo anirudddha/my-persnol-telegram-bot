@@ -1,0 +1,780 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jarvis — Telegram AI Assistant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-main: #0e1621;
+      --bg-sidebar: #17212b;
+      --bg-header: #17212b;
+      --bg-chat: #0e1621;
+      --bg-input: #17212b;
+      --bubble-bot: #182533;
+      --bubble-user: #2b5278;
+      --text-main: #f5f5f5;
+      --text-muted: #7e8c9a;
+      --accent: #2481cc;
+      --accent-hover: #2990e6;
+      --border: #242f3d;
+      --code-bg: #111923;
+      --tag-bg: #242f3d;
+      --success: #4fae68;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background-color: var(--bg-main);
+      color: var(--text-main);
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    #app {
+      display: flex;
+      width: 100%;
+      max-width: 1200px;
+      height: 100vh;
+      background: var(--bg-main);
+      border-left: 1px solid var(--border);
+      border-right: 1px solid var(--border);
+    }
+
+    /* Sidebar / Profile Info */
+    .sidebar {
+      width: 320px;
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+
+    @media (max-width: 768px) {
+      .sidebar {
+        display: none;
+      }
+    }
+
+    .sidebar-header {
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .avatar {
+      width: 46px;
+      height: 46px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #2481cc, #00c6ff);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      font-weight: 700;
+      color: #fff;
+      box-shadow: 0 2px 8px rgba(0, 198, 255, 0.25);
+    }
+
+    .sidebar-title {
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .sidebar-subtitle {
+      font-size: 13px;
+      color: var(--success);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      display: inline-block;
+    }
+
+    .sidebar-content {
+      padding: 16px;
+      overflow-y: auto;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .card {
+      background: #1e2c3a;
+      border-radius: 12px;
+      padding: 14px;
+      border: 1px solid var(--border);
+    }
+
+    .card-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 10px;
+    }
+
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+
+    .info-row:last-child {
+      margin-bottom: 0;
+    }
+
+    .info-label {
+      color: var(--text-muted);
+    }
+
+    .info-value {
+      font-weight: 500;
+    }
+
+    .quick-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .quick-btn {
+      background: #242f3d;
+      border: 1px solid transparent;
+      color: var(--text-main);
+      padding: 9px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      text-align: left;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .quick-btn:hover {
+      background: #2b394a;
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    /* Main Chat Section */
+    .chat-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-chat);
+      position: relative;
+      min-width: 0;
+    }
+
+    .chat-header {
+      height: 60px;
+      background: var(--bg-header);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      z-index: 10;
+    }
+
+    .chat-header-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .chat-header-name {
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .chat-header-status {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .chat-header-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .icon-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 8px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.15s, background 0.15s;
+    }
+
+    .icon-btn:hover {
+      color: var(--text-main);
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    /* Messages Area */
+    .messages-area {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      scroll-behavior: smooth;
+    }
+
+    .message-row {
+      display: flex;
+      width: 100%;
+    }
+
+    .message-row.user {
+      justify-content: flex-end;
+    }
+
+    .message-row.assistant {
+      justify-content: flex-start;
+    }
+
+    .bubble {
+      max-width: 75%;
+      padding: 10px 14px 6px 14px;
+      border-radius: 14px;
+      font-size: 14.5px;
+      line-height: 1.45;
+      position: relative;
+      word-break: break-word;
+    }
+
+    .message-row.user .bubble {
+      background: var(--bubble-user);
+      color: #fff;
+      border-bottom-right-radius: 4px;
+    }
+
+    .message-row.assistant .bubble {
+      background: var(--bubble-bot);
+      color: var(--text-main);
+      border-bottom-left-radius: 4px;
+    }
+
+    .bubble-meta {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 4px;
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.5);
+      margin-top: 4px;
+      user-select: none;
+    }
+
+    .bubble code {
+      font-family: 'JetBrains Mono', monospace;
+      background: var(--code-bg);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 12.5px;
+    }
+
+    .bubble pre {
+      background: var(--code-bg);
+      padding: 10px;
+      border-radius: 8px;
+      overflow-x: auto;
+      margin: 8px 0;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+    }
+
+    .bubble a {
+      color: #5ab2ff;
+      text-decoration: underline;
+    }
+
+    .bubble ul, .bubble ol {
+      margin-left: 20px;
+      margin-top: 6px;
+      margin-bottom: 6px;
+    }
+
+    /* Typing Indicator */
+    .typing-indicator {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 12px 16px;
+      background: var(--bubble-bot);
+      border-radius: 14px;
+      border-bottom-left-radius: 4px;
+      width: fit-content;
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      background: var(--text-muted);
+      border-radius: 50%;
+      animation: bounce 1.4s infinite ease-in-out both;
+    }
+
+    .dot:nth-child(1) { animation-delay: -0.32s; }
+    .dot:nth-child(2) { animation-delay: -0.16s; }
+
+    @keyframes bounce {
+      0%, 80%, 100% { transform: scale(0); }
+      40% { transform: scale(1); }
+    }
+
+    /* Chips container */
+    .chips-bar {
+      padding: 6px 16px;
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      white-space: nowrap;
+      background: var(--bg-header);
+      border-top: 1px solid var(--border);
+    }
+
+    .chips-bar::-webkit-scrollbar {
+      display: none;
+    }
+
+    .chip {
+      background: #242f3d;
+      border: 1px solid #313f52;
+      color: var(--text-main);
+      font-size: 12.5px;
+      padding: 6px 12px;
+      border-radius: 16px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      user-select: none;
+    }
+
+    .chip:hover {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    /* Input Box */
+    .chat-input-area {
+      padding: 12px 16px;
+      background: var(--bg-input);
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+    }
+
+    .input-wrapper {
+      flex: 1;
+      background: #242f3d;
+      border-radius: 20px;
+      padding: 8px 16px;
+      display: flex;
+      align-items: center;
+      border: 1px solid transparent;
+      transition: border 0.15s;
+    }
+
+    .input-wrapper:focus-within {
+      border-color: var(--accent);
+    }
+
+    textarea {
+      width: 100%;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--text-main);
+      font-size: 14.5px;
+      font-family: inherit;
+      resize: none;
+      max-height: 120px;
+      line-height: 1.4;
+    }
+
+    textarea::placeholder {
+      color: var(--text-muted);
+    }
+
+    .send-btn {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s, transform 0.1s;
+      flex-shrink: 0;
+    }
+
+    .send-btn:hover {
+      background: var(--accent-hover);
+    }
+
+    .send-btn:active {
+      transform: scale(0.95);
+    }
+
+    .send-btn:disabled {
+      background: #2b394a;
+      cursor: not-allowed;
+      opacity: 0.6;
+    }
+
+    /* Empty state */
+    .empty-state {
+      margin: auto;
+      text-align: center;
+      max-width: 360px;
+      padding: 20px;
+      color: var(--text-muted);
+    }
+
+    .empty-icon {
+      font-size: 48px;
+      margin-bottom: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <!-- Left Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="avatar">⚡</div>
+        <div>
+          <div class="sidebar-title">Jarvis AI</div>
+          <div class="sidebar-subtitle">
+            <span class="status-dot"></span> Online Assistant
+          </div>
+        </div>
+      </div>
+      <div class="sidebar-content">
+        <div class="card">
+          <div class="card-title">Connected Profile</div>
+          <div class="info-row">
+            <span class="info-label">User ID:</span>
+            <span class="info-value" id="userIdDisplay">Loading...</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Timezone:</span>
+            <span class="info-value" id="tzDisplay">Loading...</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">Currency:</span>
+            <span class="info-value" id="currDisplay">Loading...</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Quick Actions</div>
+          <div class="quick-list">
+            <button class="quick-btn" onclick="sendQuickPrompt('show my tasks')">📋 Show My Tasks</button>
+            <button class="quick-btn" onclick="sendQuickPrompt('what reminders do I have?')">⏰ List Reminders</button>
+            <button class="quick-btn" onclick="sendQuickPrompt('how much did I spend this month?')">💰 Monthly Spending</button>
+            <button class="quick-btn" onclick="sendQuickPrompt('what do you remember about me?')">🧠 Memory Recall</button>
+            <button class="quick-btn" onclick="sendQuickPrompt('what does my day look like?')">☀️ Daily Overview</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Features Supported</div>
+          <div style="font-size: 12.5px; color: var(--text-muted); line-height: 1.5;">
+            Natural Language Todos, Reminders, Expense Tracking, Key-Value Memory, and Live Web Research — all synced instantly with your Telegram Bot.
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Chat Screen -->
+    <main class="chat-container">
+      <header class="chat-header">
+        <div class="chat-header-info">
+          <div class="avatar" style="width: 38px; height: 38px; font-size: 18px;">⚡</div>
+          <div>
+            <div class="chat-header-name">Jarvis</div>
+            <div class="chat-header-status">bot • Telegram sync active</div>
+          </div>
+        </div>
+        <div class="chat-header-actions">
+          <button class="icon-btn" title="Refresh Messages" onclick="loadMessages()">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- Message list -->
+      <div class="messages-area" id="messagesArea">
+        <div class="empty-state" id="emptyState">
+          <div class="empty-icon">🤖</div>
+          <h3>Welcome to Jarvis</h3>
+          <p style="margin-top: 6px; font-size: 13.5px;">Type a message below or tap a quick action to manage tasks, reminders, expenses, and notes.</p>
+        </div>
+      </div>
+
+      <!-- Quick Chips Bar -->
+      <div class="chips-bar">
+        <span class="chip" onclick="sendQuickPrompt('show my tasks')">📋 Show tasks</span>
+        <span class="chip" onclick="sendQuickPrompt('what reminders do I have?')">⏰ Reminders</span>
+        <span class="chip" onclick="sendQuickPrompt('how much did I spend this month?')">💰 Spend summary</span>
+        <span class="chip" onclick="sendQuickPrompt('what do you remember about me?')">🧠 Memory</span>
+        <span class="chip" onclick="sendQuickPrompt('what does my day look like?')">☀️ Daily briefing</span>
+      </div>
+
+      <!-- Input area -->
+      <div class="chat-input-area">
+        <div class="input-wrapper">
+          <textarea id="chatInput" rows="1" placeholder="Write a message to Jarvis..." onkeydown="handleKeyDown(event)" oninput="autoResize(this)"></textarea>
+        </div>
+        <button class="send-btn" id="sendBtn" onclick="sendMessage()" title="Send">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+          </svg>
+        </button>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    let activeUserId = null;
+    let isSending = false;
+
+    let lastMessageCount = 0;
+
+    async function init() {
+      try {
+        const res = await fetch('/api/user');
+        const data = await res.json();
+        activeUserId = data.default_id;
+        document.getElementById('userIdDisplay').innerText = data.default_id || 'Not Set';
+        document.getElementById('tzDisplay').innerText = data.timezone || 'Asia/Kolkata';
+        document.getElementById('currDisplay').innerText = data.currency || '₹';
+      } catch (err) {
+        console.error('Failed to load user info:', err);
+      }
+      await loadMessages(true);
+
+      // Start automatic live-polling every 4 seconds for new incoming messages/reminders
+      setInterval(() => {
+        if (!isSending) {
+          loadMessages(false);
+        }
+      }, 4000);
+    }
+
+    async function loadMessages(initial = false) {
+      try {
+        const res = await fetch('/api/messages' + (activeUserId ? `?telegram_id=${activeUserId}` : ''));
+        const messages = await res.json();
+        if (initial || messages.length !== lastMessageCount) {
+          lastMessageCount = messages.length;
+          renderMessages(messages);
+        }
+      } catch (err) {
+        console.error('Failed to load messages:', err);
+      }
+    }
+
+    function renderMessages(messages) {
+      const container = document.getElementById('messagesArea');
+      container.innerHTML = '';
+      if (!messages || messages.length === 0) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">🤖</div>
+            <h3>Welcome to Jarvis</h3>
+            <p style="margin-top: 6px; font-size: 13.5px;">Type a message below or tap a quick action to manage tasks, reminders, expenses, and notes.</p>
+          </div>
+        `;
+        return;
+      }
+
+      messages.forEach(msg => {
+        appendBubble(msg.role, msg.content, msg.created_at);
+      });
+      scrollToBottom();
+    }
+
+    function formatTime(isoString) {
+      if (!isoString) {
+        const now = new Date();
+        return now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      }
+      const d = new Date(isoString);
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    }
+
+    function parseMarkdown(text) {
+      if (!text) return '';
+      // Escape basic HTML
+      let html = text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+
+      // Code blocks
+      html = html.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
+      // Inline code
+      html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+      // Bold
+      html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      // Italics
+      html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+      // URLs
+      html = html.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+      // Newlines to <br>
+      html = html.replace(/\n/g, '<br>');
+      return html;
+    }
+
+    function appendBubble(role, content, timeStr) {
+      const container = document.getElementById('messagesArea');
+      const row = document.createElement('div');
+      row.className = `message-row ${role}`;
+
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.innerHTML = parseMarkdown(content);
+
+      const meta = document.createElement('div');
+      meta.className = 'bubble-meta';
+      meta.innerHTML = `<span>${formatTime(timeStr)}</span>` + (role === 'user' ? '<span>✓✓</span>' : '');
+
+      bubble.appendChild(meta);
+      row.appendChild(bubble);
+      container.appendChild(row);
+    }
+
+    function showTypingIndicator() {
+      const container = document.getElementById('messagesArea');
+      const row = document.createElement('div');
+      row.className = 'message-row assistant';
+      row.id = 'typingRow';
+      row.innerHTML = `
+        <div class="typing-indicator">
+          <div class="dot"></div>
+          <div class="dot"></div>
+          <div class="dot"></div>
+        </div>
+      `;
+      container.appendChild(row);
+      scrollToBottom();
+    }
+
+    function removeTypingIndicator() {
+      const elem = document.getElementById('typingRow');
+      if (elem) elem.remove();
+    }
+
+    function scrollToBottom() {
+      const container = document.getElementById('messagesArea');
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function autoResize(textarea) {
+      textarea.style.height = 'auto';
+      textarea.style.height = (textarea.scrollHeight) + 'px';
+    }
+
+    function handleKeyDown(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    }
+
+    async function sendMessage() {
+      if (isSending) return;
+      const input = document.getElementById('chatInput');
+      const text = input.value.trim();
+      if (!text) return;
+
+      input.value = '';
+      autoResize(input);
+
+      // Append user bubble immediately
+      appendBubble('user', text, null);
+      scrollToBottom();
+
+      // Show typing indicator
+      showTypingIndicator();
+      isSending = true;
+      document.getElementById('sendBtn').disabled = true;
+
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: text,
+            telegram_id: activeUserId,
+            name: 'Web User'
+          })
+        });
+        const data = await res.json();
+        removeTypingIndicator();
+        appendBubble('assistant', data.reply || 'No response', new Date().toISOString());
+        scrollToBottom();
+      } catch (err) {
+        removeTypingIndicator();
+        appendBubble('assistant', 'Error connecting to Jarvis service: ' + err.message, new Date().toISOString());
+        scrollToBottom();
+      } finally {
+        isSending = false;
+        document.getElementById('sendBtn').disabled = false;
+        input.focus();
+      }
+    }
+
+    function sendQuickPrompt(prompt) {
+      const input = document.getElementById('chatInput');
+      input.value = prompt;
+      sendMessage();
+    }
+
+    window.onload = init;
+  </script>
+</body>
+</html>
