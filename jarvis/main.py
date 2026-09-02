@@ -143,6 +143,8 @@ async def reminder_tick(client: httpx.AsyncClient) -> None:
     Called by: main().
     Calls: deliver_due_reminders(), asyncio.sleep()
     """
+    # Suppressed to prevent continuous database querying and save serverless compute.
+    return
     while True:
         try:
             await deliver_due_reminders(client)
@@ -155,14 +157,15 @@ async def main() -> None:
     """
     Purpose: Application entrypoint. Starts DB pool, opens HTTP client, and starts polling + reminder loops concurrently.
     Called by: Script runner (if __name__ == "__main__").
-    Calls: db.open_pool(), httpx.AsyncClient(), asyncio.gather(poll_telegram(), reminder_tick()), db.close_pool()
+    Calls: db.open_pool(), httpx.AsyncClient(), poll_telegram(), db.close_pool()
     """
     await db.open_pool()
     # Read timeout must outlast the long poll, or every poll raises.
     async with httpx.AsyncClient(base_url=API, timeout=POLL_TIMEOUT + 10) as client:
         log.info("jarvis up")
         try:
-            await asyncio.gather(poll_telegram(client), reminder_tick(client))
+            # Running only poll_telegram (reminder_tick disabled to save DB compute)
+            await poll_telegram(client)
         finally:
             await db.close_pool()
 
