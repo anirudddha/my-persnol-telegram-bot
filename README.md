@@ -139,6 +139,19 @@ Categories are picked automatically from: food, groceries, transport, bills, sho
 health, entertainment, other. Once a budget is set, every expense reply shows how much of
 it is used and warns past 80%.
 
+**Calories & Nutrition**
+```
+had 2 rotis with paneer curry for lunch
+ate 2 boiled eggs and 2 slices of bread
+drank a glass of cold coffee
+set my daily calorie target to 2000
+how many calories did I eat today?
+show my meals today
+delete meal 4
+```
+Calories are estimated automatically based on described portions. Once a daily goal is set,
+every logged meal shows progress, total kcal consumed, and calories remaining.
+
 **Research and overview**
 ```
 compare these two phones

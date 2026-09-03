@@ -118,6 +118,17 @@ def test_page_text_strips_markup_and_scripts():
     assert "color:red" not in text and "alert" not in text and "Menu Home" not in text
 
 
+def test_day_bounds():
+    tz = ZoneInfo("Asia/Kolkata")
+    start, end = tools.day_bounds(tz, 0, datetime(2026, 9, 2, 14, 30, tzinfo=tz))
+    assert start == datetime(2026, 9, 2, 0, 0, tzinfo=tz)
+    assert end == datetime(2026, 9, 3, 0, 0, tzinfo=tz)
+
+    yesterday_start, yesterday_end = tools.day_bounds(tz, -1, datetime(2026, 9, 2, 14, 30, tzinfo=tz))
+    assert yesterday_start == datetime(2026, 9, 1, 0, 0, tzinfo=tz)
+    assert yesterday_end == datetime(2026, 9, 2, 0, 0, tzinfo=tz)
+
+
 def test_every_tool_schema_has_a_handler():
     """A schema without a handler is a tool the model can call into a void."""
     named = {t["function"]["name"] for t in tools.TOOLS}
@@ -355,3 +366,26 @@ async def test_bad_reminder_time_is_reported_not_raised(user):
     assert "Unsupported recurrence" in await tools.create_reminder(
         user, "x", "2026-08-07T08:00:00", "hourly"
     )
+
+
+@needs_db
+async def test_meal_roundtrip_and_calories(user):
+    await tools.set_calorie_target(user, 2000)
+    add_res = await tools.add_meal(user, "2 rotis and dal", 350, "lunch")
+    assert "Logged #" in add_res and "350 of 2,000 kcal" in add_res
+
+    meals = await tools.list_meals(user, days=1)
+    assert "2 rotis and dal" in meals and "350 kcal" in meals
+
+    summary = await tools.calorie_summary(user)
+    assert "350 kcal" in summary and "lunch" in summary and "1,650 kcal left" in summary
+
+    # Duplicate within 2 minutes blocked
+    dup_res = await tools.add_meal(user, "2 rotis and dal", 350, "lunch")
+    assert "already logged" in dup_res
+
+    # Delete meal
+    row = await db.fetchone("select id from meals where user_id = %s", user)
+    del_res = await tools.delete_meal(user, row["id"])
+    assert "Deleted 2 rotis and dal" in del_res
+

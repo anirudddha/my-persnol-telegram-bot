@@ -466,6 +466,198 @@ async def set_budget(user_id: int, amount: float) -> str:
     return f"Monthly budget set to {_money(amount)}."
 
 
+# --- meals & calories ---------------------------------------------------
+
+MEAL_TYPES = ["breakfast", "lunch", "dinner", "snack", "drink", "other"]
+
+
+def day_bounds(tz: ZoneInfo, offset_days: int = 0, today: datetime | None = None) -> tuple[datetime, datetime]:
+    """
+    Purpose: Calculates start and end timestamps (midnight to midnight) of a day in user's timezone.
+    Called by: _calorie_target_note(), calorie_summary(), list_meals().
+    Calls: datetime arithmetic
+    """
+    now = today or datetime.now(tz)
+    base_date = (now + timedelta(days=offset_days)).date()
+    start = datetime(base_date.year, base_date.month, base_date.day, tzinfo=tz)
+    end = start + timedelta(days=1)
+    return start, end
+
+
+async def _calorie_target_note(user_id: int, tz: ZoneInfo) -> str:
+    """
+    Purpose: Computes today's total consumed calories against daily target and returns status string.
+    Called by: add_meal().
+    Calls: db.fetchone(), day_bounds()
+    """
+    row = await db.fetchone("select daily_calorie_target from users where telegram_id = %s", user_id)
+    target = row and row["daily_calorie_target"]
+    if not target:
+        return ""
+    start, end = day_bounds(tz)
+    consumed_row = await db.fetchone(
+        "select coalesce(sum(calories), 0) as total from meals"
+        " where user_id = %s and logged_at >= %s and logged_at < %s",
+        user_id,
+        start,
+        end,
+    )
+    total = int(consumed_row["total"])
+    share = (total / target) * 100
+    remaining = target - total
+    note = f" — {total:,} of {target:,} kcal today ({share:.0f}%)"
+    if total > target:
+        return note + f", over by {total - target:,} kcal"
+    return note + f", {remaining:,} kcal left"
+
+
+async def add_meal(
+    user_id: int,
+    food_item: str,
+    calories: int,
+    meal_type: str = "other",
+    logged_at: str | None = None,
+) -> str:
+    """
+    Purpose: Records a food meal entry with approximate calories in the database.
+    Called by: handler._run_tool() (via AI tool call 'add_meal').
+    Calls: user_tz(), _recent_duplicate(), db.fetchone(), _calorie_target_note()
+    """
+    if calories <= 0:
+        return "Calories must be a positive integer."
+    if meal_type not in MEAL_TYPES:
+        meal_type = "other"
+    tz = await user_tz(user_id)
+    when = datetime.now(tz)
+    if logged_at:
+        try:
+            when = datetime.fromisoformat(logged_at)
+        except ValueError:
+            return f"Could not read '{logged_at}' as a date. Use ISO format, e.g. 2026-09-02T13:00:00."
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=tz)
+    if existing := await _recent_duplicate(
+        "meals", user_id, food_item=food_item, calories=calories
+    ):
+        return (
+            f"'{food_item}' ({calories} kcal) is already logged as"
+            f" #{existing['id']} — not adding it twice."
+        )
+    row = await db.fetchone(
+        "insert into meals (user_id, food_item, calories, meal_type, logged_at)"
+        " values (%s, %s, %s, %s, %s) returning id",
+        user_id,
+        food_item,
+        calories,
+        meal_type,
+        when,
+    )
+    return (
+        f"Logged #{row['id']}: {food_item} ({meal_type}, ~{calories} kcal)"
+        + await _calorie_target_note(user_id, tz)
+    )
+
+
+async def list_meals(user_id: int, days: int = 1) -> str:
+    """
+    Purpose: Lists recently logged meals with calories and meal categories.
+    Called by: handler._run_tool() (via AI tool call 'list_meals').
+    Calls: user_tz(), db.fetch()
+    """
+    tz = await user_tz(user_id)
+    rows = await db.fetch(
+        "select id, food_item, calories, meal_type, logged_at from meals"
+        " where user_id = %s and logged_at >= now() - make_interval(days => %s)"
+        " order by logged_at desc",
+        user_id,
+        days,
+    )
+    if not rows:
+        return f"No meals logged in the last {days} day(s)."
+    total = sum(r["calories"] for r in rows)
+    lines = [
+        f"#{r['id']} {r['logged_at'].astimezone(tz):%d %b %H:%M} ~{r['calories']} kcal"
+        f" — {r['food_item']} ({r['meal_type']})"
+        for r in rows
+    ]
+    return "\n".join(lines) + f"\nTotal: {total:,} kcal"
+
+
+async def delete_meal(user_id: int, meal_id: int) -> str:
+    """
+    Purpose: Removes a logged meal from the database by ID.
+    Called by: handler._run_tool() (via AI tool call 'delete_meal').
+    Calls: db.fetchone()
+    """
+    row = await db.fetchone(
+        "delete from meals where id = %s and user_id = %s returning food_item, calories",
+        meal_id,
+        user_id,
+    )
+    if not row:
+        return f"No meal #{meal_id}."
+    return f"Deleted {row['food_item']} (~{row['calories']} kcal)."
+
+
+async def calorie_summary(user_id: int, days_ago: int = 0) -> str:
+    """
+    Purpose: Generates a daily summary of calorie intake broken down by meal type vs daily target.
+    Called by: handler._run_tool() (via AI tool call 'calorie_summary').
+    Calls: user_tz(), day_bounds(), db.fetch(), db.fetchone()
+    """
+    tz = await user_tz(user_id)
+    start, end = day_bounds(tz, -abs(days_ago))
+    rows = await db.fetch(
+        "select meal_type, sum(calories) as total, count(*) as count from meals"
+        " where user_id = %s and logged_at >= %s and logged_at < %s"
+        " group by meal_type order by total desc",
+        user_id,
+        start,
+        end,
+    )
+    label = f"{start:%A, %d %B %Y}"
+    if not rows:
+        return f"No meals logged for {label}."
+
+    total = sum(r["total"] for r in rows)
+    lines = [f"Calories for {label}: {total:,} kcal"]
+    lines += [
+        f"  {r['meal_type']}: {r['total']:,} kcal ({r['count']} item{'s' if r['count'] > 1 else ''})"
+        for r in rows
+    ]
+
+    target_row = await db.fetchone(
+        "select daily_calorie_target from users where telegram_id = %s", user_id
+    )
+    if target_row and target_row["daily_calorie_target"]:
+        target = target_row["daily_calorie_target"]
+        left = target - total
+        lines.append(
+            f"Daily Goal {target:,} kcal: "
+            + (f"{left:,} kcal left" if left >= 0 else f"over by {-left:,} kcal")
+        )
+    return "\n".join(lines)
+
+
+async def set_calorie_target(user_id: int, target_calories: int) -> str:
+    """
+    Purpose: Sets or clears (if <= 0) the user's daily calorie intake target in the users table.
+    Called by: handler._run_tool() (via AI tool call 'set_calorie_target').
+    Calls: db.execute()
+    """
+    if target_calories <= 0:
+        await db.execute(
+            "update users set daily_calorie_target = null where telegram_id = %s", user_id
+        )
+        return "Daily calorie target cleared."
+    await db.execute(
+        "update users set daily_calorie_target = %s where telegram_id = %s",
+        target_calories,
+        user_id,
+    )
+    return f"Daily calorie target set to {target_calories:,} kcal."
+
+
 # --- research ------------------------------------------------------------
 
 SEARCH_RESULTS = 5
@@ -612,6 +804,11 @@ HANDLERS = {
         set_budget,
         search_web,
         read_url,
+        add_meal,
+        list_meals,
+        delete_meal,
+        calorie_summary,
+        set_calorie_target,
     )
 }
 
@@ -703,6 +900,7 @@ TOOLS = [
         {
             "days": {"type": "integer", "description": "How far back to look. Default 7."},
             "category": {"type": "string", "enum": CATEGORIES},
+            "spends": {"type": "string", "description": "Optional category filter."},
         },
         [],
     ),
@@ -724,6 +922,41 @@ TOOLS = [
         "Set the user's monthly spending budget. Pass 0 to clear it.",
         {"amount": {"type": "number"}},
         ["amount"],
+    ),
+    _tool(
+        "add_meal",
+        "Record food or drink the user consumed with estimated calories in kcal. "
+        "Estimate calories reasonably based on portions described. "
+        "Pick meal_type from breakfast, lunch, dinner, snack, drink, other.",
+        {
+            "food_item": {**_STR, "description": "What was eaten/drunk with portion (e.g. '2 rotis and a bowl of dal')."},
+            "calories": {"type": "integer", "description": "Approximate calories in kcal (e.g. 350)."},
+            "meal_type": {"type": "string", "enum": MEAL_TYPES, "description": "Meal category."},
+            "logged_at": {
+                **_STR,
+                "description": "ISO date/datetime if user ate at a specific time ('yesterday at 2pm'). Omit for now.",
+            },
+        },
+        ["food_item", "calories"],
+    ),
+    _tool(
+        "list_meals",
+        "List recently logged meals and drinks with id numbers and calories.",
+        {"days": {"type": "integer", "description": "How many days back to look. Default 1."}},
+        [],
+    ),
+    _tool("delete_meal", "Remove a logged meal by its id number.", {"meal_id": _INT}, ["meal_id"]),
+    _tool(
+        "calorie_summary",
+        "Show total calorie intake for today (or past days) broken down by meal type, with progress against daily calorie goal.",
+        {"days_ago": {"type": "integer", "description": "0 for today (default), 1 for yesterday."}},
+        [],
+    ),
+    _tool(
+        "set_calorie_target",
+        "Set the user's daily calorie intake goal in kcal (e.g. 2000). Pass 0 to clear.",
+        {"target_calories": _INT},
+        ["target_calories"],
     ),
     _tool(
         "search_web",

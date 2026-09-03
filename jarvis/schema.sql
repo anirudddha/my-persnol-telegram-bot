@@ -66,3 +66,16 @@ create table if not exists memory_items (
     created_at timestamptz not null default now(),
     unique (user_id, key)
 );
+
+alter table users add column if not exists daily_calorie_target integer;
+
+create table if not exists meals (
+    id         bigserial primary key,
+    user_id    bigint      not null references users (telegram_id) on delete cascade,
+    food_item  text        not null,
+    calories   integer     not null check (calories > 0),
+    meal_type  text        not null default 'other',
+    logged_at  timestamptz not null default now(),
+    created_at timestamptz not null default now()
+);
+create index if not exists meals_user_time on meals (user_id, logged_at desc);
